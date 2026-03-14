@@ -1,0 +1,5 @@
+{
+  "name": "NephroGuard",
+  "description": "A comprehensive smart home dialysis monitoring system featuring real-time vitals tracking, machine status alerts, and remote medical supervision via AWS cloud services.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,110 @@
+# NephroGuard: Smart Home Dialysis Monitoring System Architecture
+
+## 1. System Architecture Overview
+
+The system follows a multi-tier IoT architecture designed for high reliability and medical data security.
+
+### A. Hardware Layer (The Edge)
+- **Microcontroller**: Arduino Uno R3 handles sensor polling.
+- **Connectivity**: ESP8266 (NodeMCU/Shield) transmits data via MQTT/HTTPS.
+- **Sensors**:
+    - **AD8232**: Real-time ECG signal.
+    - **MAX30100**: SpO2 and Heart Rate.
+    - **DS18B20**: Body Temperature.
+    - **YF-S201**: Dialysis fluid flow rate (Safety Critical).
+    - **BP Sensor**: Systolic/Diastolic pressure.
+
+### B. IoT Communication Layer
+- **Blynk IoT**: Acts as a low-latency bridge for real-time hardware debugging and local control.
+    - **REST API Integration**: The Android/Web app polls the Blynk REST API (`/external/api/get`) to fetch real-time sensor values from virtual pins.
+    - **Bi-directional Control**: The app can send commands back to hardware (e.g., triggering a buzzer via `/external/api/update`) when anomalies are detected.
+- **AWS IoT Core**: The primary enterprise-grade gateway. ESP8266 connects via MQTT with X.509 certificate-based authentication.
+
+### C. Cloud Layer (AWS - No Firebase)
+- **AWS IoT Core**: Receives MQTT messages, triggers Rules Engine.
+- **AWS Lambda**: Processes incoming telemetry, performs anomaly detection (Flow Rate Safety), and writes to DynamoDB.
+- **Amazon DynamoDB**: NoSQL storage for high-velocity vitals and session history.
+- **Amazon S3**: Stores raw ECG waveform data (blobs) for historical review.
+- **Amazon Cognito**: Manages User Pools (Patients, Doctors, Nurses) and Identity Pools for secure API access.
+- **AWS API Gateway**: Exposes secure REST endpoints for the Android/Web apps.
+- **Amazon SNS**: Sends push notifications, SMS, and emails for critical alerts.
+
+---
+
+## 3. Blynk Pin Mapping (Recommended)
+
+| Pin | Sensor / Function | Type | Unit |
+|---|---|---|---|
+| **V1** | Heart Rate | Double | BPM |
+| **V2** | SpO2 | Double | % |
+| **V3** | Body Temperature | Double | °C |
+| **V4** | Dialysis Flow Rate | Double | mL/min |
+| **V5** | Blood Pressure | String | "120/80" |
+| **V10** | Alarm Buzzer | Integer | 0/1 |
+
+---
+
+## 2. Android App Architecture (MVVM)
+
+The recommended architecture is **MVVM (Model-View-ViewModel)** with **Clean Architecture** principles.
+
+- **View**: Activities/Fragments (Jetpack Compose or XML). Observes LiveData/Flow from ViewModel.
+- **ViewModel**: Holds UI state, communicates with Repository. Survives configuration changes.
+- **Repository**: Single source of truth. Decides whether to fetch from Local DB (Room) or Remote API (AWS).
+- **Remote Data Source**: Retrofit/OkHttp for AWS API Gateway or AWS Mobile SDK.
+- **Local Data Source**: Room Database for offline caching of recent vitals.
+
+---
+
+## 3. DynamoDB Schema Design
+
+### Table: `DialysisSessions`
+- **Partition Key (PK)**: `patientId` (String)
+- **Sort Key (SK)**: `sessionId` (String, e.g., `SESSION#2023-10-27T10:00:00`)
+- **Attributes**:
+    - `startTime`: Timestamp
+    - `endTime`: Timestamp
+    - `status`: `ACTIVE | COMPLETED | INTERRUPTED`
+    - `avgFlowRate`: Number
+    - `machineId`: String
+
+### Table: `PatientVitals`
+- **Partition Key (PK)**: `patientId` (String)
+- **Sort Key (SK)**: `timestamp` (Number/ISO String)
+- **Attributes**:
+    - `heartRate`: Number
+    - `spo2`: Number
+    - `temperature`: Number
+    - `systolic`: Number
+    - `diastolic`: Number
+    - `flowRate`: Number
+    - `ecgSampleId`: String (Reference to S3 object)
+
+---
+
+## 4. Kotlin Code Snippets (AWS Integration)
+
+### A. AWS API Communication (Retrofit)
+```kotlin
+interface NephroGuardApi {
+    @GET("vitals/{patientId}")
+    suspend fun getLatestVitals(
+        @Path("patientId") patientId: String,
+        @Header("Authorization") token: String
+    ): Response<VitalsResponse>
+}
+```
+
+### B. Real-time Updates (AWS IoT MQTT)
+```kotlin
+// Using AWS Mobile SDK for Android
+val mqttManager = AWSIotMqttManager(clientId, CUSTOMER_SPECIFIC_ENDPOINT)
+mqttManager.connect(clientCredentialsProvider) { status ->
+    if (status == AWSIotMqttClientStatus.Connected) {
+        mqttManager.subscribeToTopic("vitals/patient/123", AWSIotMqttQos.QOS0) { topic, data ->
+            val message = String(data)
+            // Parse JSON and update UI via LiveData
+        }
+    }
+}
+```
